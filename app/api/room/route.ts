@@ -1,6 +1,6 @@
+import { getRoom, getStore, setRoom } from "@/lib/store";
+import { DEFAULT_CARD_VALUES, Room } from "@/lib/types";
 import { NextRequest, NextResponse } from "next/server";
-import { getRoom, setRoom } from "@/lib/store";
-import { Room, DEFAULT_CARD_VALUES } from "@/lib/types";
 
 // GET /api/room?id=xxx
 export async function GET(req: NextRequest) {
@@ -20,7 +20,11 @@ export async function POST(req: NextRequest) {
 
   if (!name?.trim()) return NextResponse.json({ error: "Name required" }, { status: 400 });
 
-  const id = Math.random().toString(36).substring(2, 8).toUpperCase();
+  // Garante ID único — evita sobrescrever sala ativa em caso de colisão
+  let id: string;
+  do {
+    id = Math.random().toString(36).substring(2, 8).toUpperCase();
+  } while (getStore().has(id));
   const room: Room = {
     id,
     name: name.trim(),

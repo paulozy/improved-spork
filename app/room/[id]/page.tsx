@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { Room } from "@/lib/types";
-import VotingCard from "@/components/VotingCard";
+import CardEditor from "@/components/CardEditor";
 import ParticipantList from "@/components/ParticipantList";
 import ResultsPanel from "@/components/ResultsPanel";
-import CardEditor from "@/components/CardEditor";
 import StoryInput from "@/components/StoryInput";
+import VotingCard from "@/components/VotingCard";
+import { Room } from "@/lib/types";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL = 2500;
 
@@ -23,6 +23,8 @@ export default function RoomPage() {
   const [showCardEditor, setShowCardEditor] = useState(false);
   const [copied, setCopied] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [nameInput, setNameInput] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const myIdRef = useRef("");
   const myNameRef = useRef("");
@@ -30,25 +32,22 @@ export default function RoomPage() {
   const fetchRoom = useCallback(async () => {
     try {
       const res = await fetch(`/api/room?id=${id}`);
+      if (res.status === 404) {
+        // Sala foi removida (restart do servidor ou expirou) — para o polling e mostra aviso
+        if (pollRef.current) clearInterval(pollRef.current);
+        setNotFound(true);
+        return;
+      }
       if (!res.ok) return;
       const data: Room = await res.json();
       setRoom(data);
       const me = data.participants.find((p) => p.id === myIdRef.current);
       if (me) setMyVote(me.vote);
-    } catch { /* ignore */ }
+    } catch { /* ignore network errors temporários */ }
   }, [id]);
 
-  // Init: join room
-  useEffect(() => {
-    const pid = sessionStorage.getItem("participantId") || crypto.randomUUID();
-    const pname = sessionStorage.getItem("participantName") || "Anônimo";
-    sessionStorage.setItem("participantId", pid);
-    sessionStorage.setItem("participantName", pname);
-    setMyId(pid);
-    setMyName(pname);
-    myIdRef.current = pid;
-    myNameRef.current = pname;
-
+  function doJoin(pid: string, pname: string) {
+    setLoading(true);
     fetch("/api/vote", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -58,9 +57,31 @@ export default function RoomPage() {
         if (!r.ok) { setNotFound(true); return; }
         const data: Room = await r.json();
         setRoom(data);
+        // Só inicia o polling após entrar com sucesso
+        setMyId(pid);
       })
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
+  }
+
+  // Init: prepara IDs e decide se pede nome ou entra direto
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const pid = sessionStorage.getItem("participantId") || crypto.randomUUID();
+    sessionStorage.setItem("participantId", pid);
+    myIdRef.current = pid;
+
+    const savedName = sessionStorage.getItem("participantName");
+    if (!savedName) {
+      // Primeiro acesso via link direto — pede nome antes de entrar
+      setLoading(false);
+      setShowNameModal(true);
+      return;
+    }
+
+    myNameRef.current = savedName;
+    setMyName(savedName);
+    doJoin(pid, savedName);
   }, [id]);
 
   // Polling
@@ -79,7 +100,7 @@ export default function RoomPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ roomId: id, participantId: myIdRef.current }),
           keepalive: true,
-        }).catch(() => {});
+        }).catch(() => { });
       }
     };
     window.addEventListener("beforeunload", handleUnload);
@@ -139,15 +160,61 @@ export default function RoomPage() {
   }
 
   function copyCode() {
-    navigator.clipboard.writeText(id).catch(() => {});
+    navigator.clipboard.writeText(id).catch(() => { });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   function copyLink() {
-    navigator.clipboard.writeText(window.location.href).catch(() => {});
+    navigator.clipboard.writeText(window.location.href).catch(() => { });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function handleNameSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const name = nameInput.trim() || "Anônimo";
+    sessionStorage.setItem("participantName", name);
+    myNameRef.current = name;
+    setMyName(name);
+    setShowNameModal(false);
+    doJoin(myIdRef.current, name);
+  }
+
+  if (showNameModal) {
+    return (
+      <div className="min-h-screen bg-paper flex items-center justify-center p-6">
+        <div className="w-full max-w-sm bg-white border border-cream rounded-2xl shadow-sm p-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-9 h-9 bg-ink rounded-lg flex items-center justify-center shrink-0">
+              <span className="text-paper font-display font-bold text-sm">SP</span>
+            </div>
+            <div>
+              <p className="font-display text-xs uppercase tracking-widest text-muted">Scrum Poker</p>
+              <p className="font-display font-700 text-ink text-base leading-tight">Entrar na sala</p>
+            </div>
+          </div>
+          <p className="font-body text-muted text-sm mb-5">Como você quer ser identificado pelos outros participantes?</p>
+          <form onSubmit={handleNameSubmit} className="flex flex-col gap-3">
+            <input
+              autoFocus
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Seu nome"
+              maxLength={32}
+              className="w-full px-4 py-3 border border-cream rounded-xl font-body text-ink bg-paper placeholder:text-muted focus:outline-none focus:border-ink transition-colors"
+            />
+            <button
+              type="submit"
+              className="w-full px-4 py-3 bg-ink text-paper font-display uppercase tracking-widest text-sm rounded-xl hover:opacity-80 transition-opacity"
+            >
+              Entrar →
+            </button>
+          </form>
+        </div>
+      </div>
+    );
   }
 
   if (loading) {
@@ -230,11 +297,10 @@ export default function RoomPage() {
             <button
               onClick={handleReveal}
               disabled={room.participants.length === 0}
-              className={`px-4 py-2 text-xs font-display uppercase tracking-widest rounded-lg transition-all disabled:opacity-40 ${
-                allVoted
-                  ? "bg-accent text-white hover:opacity-90 shadow-md"
-                  : "bg-ink text-paper hover:opacity-80"
-              }`}
+              className={`px-4 py-2 text-xs font-display uppercase tracking-widest rounded-lg transition-all disabled:opacity-40 ${allVoted
+                ? "bg-accent text-white hover:opacity-90 shadow-md"
+                : "bg-ink text-paper hover:opacity-80"
+                }`}
             >
               Revelar →
             </button>
@@ -292,9 +358,8 @@ export default function RoomPage() {
                 {room.participants.map((p) => (
                   <div key={p.id} className="flex flex-col items-center gap-1.5">
                     <div
-                      className={`w-16 h-24 rounded-xl border-2 flex items-center justify-center font-display font-700 text-2xl animate-flip-in ${
-                        p.vote ? "bg-ink text-paper border-ink" : "bg-cream text-muted border-cream"
-                      }`}
+                      className={`w-16 h-24 rounded-xl border-2 flex items-center justify-center font-display font-700 text-2xl animate-flip-in ${p.vote ? "bg-ink text-paper border-ink" : "bg-cream text-muted border-cream"
+                        }`}
                     >
                       {p.vote ?? "—"}
                     </div>

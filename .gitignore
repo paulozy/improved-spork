@@ -28,4 +28,7 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# room data (persist\u00eancia local)
+/.data
 next-env.d.ts
