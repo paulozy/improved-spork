@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { DEFAULT_CARD_VALUES } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export default function Home() {
   const router = useRouter();
@@ -24,7 +24,15 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: roomName, cardValues: DEFAULT_CARD_VALUES }),
       });
+      if (!res.ok) {
+        setError("Erro ao criar sala. Tente novamente.");
+        return;
+      }
       const room = await res.json();
+      if (!room?.id) {
+        setError("Erro ao criar sala. Tente novamente.");
+        return;
+      }
       const pid = crypto.randomUUID();
       sessionStorage.setItem("participantId", pid);
       sessionStorage.setItem("participantName", yourName.trim());
@@ -80,11 +88,10 @@ export default function Home() {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`flex-1 py-4 font-display font-600 text-sm uppercase tracking-widest transition-colors ${
-                tab === t
+              className={`flex-1 py-4 font-display font-600 text-sm uppercase tracking-widest transition-colors ${tab === t
                   ? "bg-ink text-paper"
                   : "text-muted hover:text-ink"
-              }`}
+                }`}
             >
               {t === "create" ? "Criar Sala" : "Entrar"}
             </button>

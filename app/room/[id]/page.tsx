@@ -10,6 +10,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL = 2500;
+const JOIN_RETRY_ATTEMPTS = 4;
+const JOIN_RETRY_DELAY_MS = 300;
 
 export default function RoomPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,17 +30,25 @@ export default function RoomPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const myIdRef = useRef("");
   const myNameRef = useRef("");
+  const notFoundStreakRef = useRef(0);
+
+  async function wait(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
 
   const fetchRoom = useCallback(async () => {
     try {
       const res = await fetch(`/api/room?id=${id}`);
       if (res.status === 404) {
-        // Sala foi removida (restart do servidor ou expirou) — para o polling e mostra aviso
+        notFoundStreakRef.current += 1;
+        if (notFoundStreakRef.current < 3) return;
+        // Evita falso-positivo em 404 transitório; só marca not found após sequência de falhas
         if (pollRef.current) clearInterval(pollRef.current);
         setNotFound(true);
         return;
       }
       if (!res.ok) return;
+      notFoundStreakRef.current = 0;
       const data: Room = await res.json();
       setRoom(data);
       const me = data.participants.find((p) => p.id === myIdRef.current);
@@ -46,22 +56,41 @@ export default function RoomPage() {
     } catch { /* ignore network errors temporários */ }
   }, [id]);
 
-  function doJoin(pid: string, pname: string) {
+  async function doJoin(pid: string, pname: string) {
     setLoading(true);
-    fetch("/api/vote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ roomId: id, participantId: pid, participantName: pname }),
-    })
-      .then(async (r) => {
-        if (!r.ok) { setNotFound(true); return; }
-        const data: Room = await r.json();
-        setRoom(data);
-        // Só inicia o polling após entrar com sucesso
-        setMyId(pid);
-      })
-      .catch(() => setNotFound(true))
-      .finally(() => setLoading(false));
+    setNotFound(false);
+    for (let attempt = 1; attempt <= JOIN_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await fetch("/api/vote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roomId: id, participantId: pid, participantName: pname }),
+        });
+
+        if (response.ok) {
+          const data: Room = await response.json();
+          setRoom(data);
+          setMyId(pid);
+          setLoading(false);
+          return;
+        }
+
+        if (response.status !== 404 || attempt === JOIN_RETRY_ATTEMPTS) {
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+
+        await wait(JOIN_RETRY_DELAY_MS * attempt);
+      } catch {
+        if (attempt === JOIN_RETRY_ATTEMPTS) {
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        await wait(JOIN_RETRY_DELAY_MS * attempt);
+      }
+    }
   }
 
   // Init: prepara IDs e decide se pede nome ou entra direto
@@ -81,7 +110,7 @@ export default function RoomPage() {
 
     myNameRef.current = savedName;
     setMyName(savedName);
-    doJoin(pid, savedName);
+    void doJoin(pid, savedName);
   }, [id]);
 
   // Polling
@@ -178,7 +207,7 @@ export default function RoomPage() {
     myNameRef.current = name;
     setMyName(name);
     setShowNameModal(false);
-    doJoin(myIdRef.current, name);
+    void doJoin(myIdRef.current, name);
   }
 
   if (showNameModal) {
